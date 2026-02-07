@@ -1,0 +1,1914 @@
+---
+title: "MurakamiEng"
+author: "Alessia Sebastiano 172032"
+date: "2026-01-25"
+output: html_document
+---
+
+# Dentro la dimensione Murakami
+
+L'obiettivo di questa analisi è quella di individuare il mondo che l'autore Haruki Murakami descrive e rappresenta attraverso i suoi misteriosi e cupi mondi, in bilico tra sogno e realtà, alla scoperta dell'esistenza umana.
+All'inizio dell'analisi mi sono concentrata nell'individuare gli aspetti tecnici e formali della scrittura murakamiana per poi passare all'analisi semantica dei libri basandomi principalemtne su queste domande:
+1) individuare i libri che hanno fortemente influenzato Murakami
+2) confronto tra primo e ultim romanzo
+3) individuare temi ricorrenti nei libri
+4) analizzare i libri in sequenza per individuare eventuali periodi dell'autore
+5) individuare cosa vanno cercando i lettori di Murakami dai suoi romanzi, analizzando quelli più popolari 
+
+```{r setup}
+library(tidyverse)
+library(tidytext)
+library(tidygraph)
+library(widyr)
+library(igraph)
+library(ggraph)
+library(scales)
+library(wordcloud)
+library(RColorBrewer)
+
+# Caricamento del dataset dei libri di murakami e dei libri ispirati da muraki
+dfM <- read_rds("murakami_english.rds")
+dfA <- read_rds("others_books.rds")
+
+# Definisco un ordinamento per i libri
+ordine_libri <- c(
+  "1-Hear the Wind Sing",
+  "2-Pinball, 1973",
+  "3-A Wild Sheep Chase",
+  "4-Hard Boiled Wonderland and the End of the World",
+  "5-Norwegian wood",
+  "6-Dance Dance Dance",
+  "7-South of the Border West of the Sun",
+  "8-The Wind-Up Bird Chronicle",
+  "9-Sputnik Sweetheart",
+  "10-Kafka On The Shore",
+  "11-After Dark",
+  "12-1Q84",
+  "13-Colorless Tsukuru Tazaki",
+  "14-Killing Commendatore",
+  "15-The City and Its Uncertain"
+)
+
+# Applica factor ai dataset principali
+dfM <- dfM %>%
+  mutate(libro = factor(libro, levels = ordine_libri))
+
+```
+In questa sezione ho semplicemente caricato i dataframe dei 15 libri di Murakami (1-Hear the Wind Sing, 2-Pinball, 1973 , 3-A Wild Sheep Chase, 4-Hard Boiled Wonderland and the End of the World, 5-Norwegian wood, 6-Dance Dance Dance ,7-South of the Border West of the Sun, 8-The Wind-Up Bird Chronicle, 9-Sputnik Sweetheart, 10-Kafka On The Shore ,11-After Dark, 12-1Q84, 13-Colorless Tsukuru Tazaki, 14-Killing Commendatore, 15-The City and Its Uncertain). Inoltre ho caricato anche il dataframe con le opere principali di alcuni artisti che hanno avuto grande influenza sull'autore (1984,The Great Gatsby, The Long Goodbye, Trout Fishing in America).
+
+```{r token}
+
+#TOKENIZZAZIONE E PULIZIA
+
+# visualizzo la struttura del dataset
+glimpse(dfM)
+
+# Tokenizzazione, un token (parola) per riga 
+libri_tidy <- dfM %>%
+  unnest_tokens(word, text)
+
+# Rimozione delle stop words
+libri_tidy <- libri_tidy %>%
+  anti_join(stop_words, by = "word")
+
+
+glimpse(libri_tidy)
+
+# Salvataggio 
+#write_rds(libri_tidy, "murakami_english_tidy.rds")
+
+```
+In questa prima fase mi sono concentrata sulla preparazione del testo.
+
+Osservando il dataframe iniziale tramite glimpse(dfM), emerge che il corpus è composto da 615 righe, ciascuna delle quali rappresenta un blocco di testo (capitoli) estratto per tutti i libri analizzati. Il dataset è organizzato in cinque colonne principali:
+
+text, che contiene il testo vero e proprio;
+
+linea, un identificativo progressivo del blocco;
+
+libro, il titolo dell’opera considerata;
+
+anno, che indica l’anno di pubblicazione;
+
+genere, che classifica il genere letterario del libro;
+ 
+A partire da questa struttura, il testo è stato sottoposto a tokenizzazione che trasforma il corpus dal formato “paragrafo” a un formato one-token-per-row che porta ad alcune trasformazioni automatiche come: 
+- le parole vengono convertite in minuscolo
+- la punteggiatura viene rimossa 
+- le informazioni contestuali (libro, anno, genere) vengono replicate per ciascun token. 
+In questo modo, ogni parola resta sempre collegata al contesto narrativo da cui proviene.
+
+Successivamente sono andata a rimuovere le stopword e quindi le parole molto frequenti nella lingua inglese che hanno un peso informativo ridotto e rischiano di coprire termini più significativi dal punto di vista semantico.
+
+Ho scelto di non applicare lo stemming perché non volevo rischiare di ridurre parole diverse a una stessa radice e perdere poi le varie sfumature semantiche. 
+
+# 1. ANALISI ESPLORATUVA
+
+```{r esplorativo}
+
+levels(libri_tidy$libro)
+
+# 1: calcolo la lunghezza media delle parole
+
+# Lunghezza complessiva
+libri_tidy %>%
+  mutate(word_length = nchar(word)) %>%
+  summarise(media_lunghezza = mean(word_length))
+
+# Lunghezza per ciascun libro 
+lunghezza_per_libro <- libri_tidy %>%
+  mutate(word_length = nchar(word)) %>%
+  group_by(libro) %>%
+  summarise(media_lunghezza = mean(word_length)) %>%
+  arrange(libro)
+
+print(lunghezza_per_libro, n = 15)
+
+# Distribuzione complessiva
+libri_tidy %>%
+  mutate(word_length = nchar(word)) %>%
+  ggplot(aes(x = word_length)) +
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "black") +
+  labs(title = "Word length distribution — Murakami corpus",
+       x = "Word length",
+       y = "Frequency") +
+  theme_minimal()
+
+# Distribuzione per libro
+libri_tidy %>%
+  mutate(word_length = nchar(word)) %>%
+  ggplot(aes(x = word_length, fill = libro)) +
+  geom_histogram(binwidth = 1, color = "black") +
+  facet_wrap(~libro, scales = "free_y") +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(title = "Word length distribution per book",
+       x = "Word length",
+       y = "Frequency")
+
+
+#2: calcolo la frequenza delle parole
+
+# Frequenze assolute globali
+word_frequencies <- libri_tidy %>%
+  count(word, sort = TRUE)
+
+# Visualizzazione top 20 parole più frequenti
+word_frequencies %>%
+  top_n(20, n) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Most frequent words — Murakami corpus",
+       x = NULL,
+       y = "Word count") +
+  theme_minimal()
+
+# Word cloud complessivo
+set.seed(42)  
+word_frequencies %>%
+  with(wordcloud(word, n, 
+                 max.words = 100,
+                 random.order = FALSE,
+                 colors = brewer.pal(8, "Dark2")))
+
+
+# Frequenze assolute per libro
+word_freq_per_book <- libri_tidy %>%
+  count(libro, word, sort = TRUE)
+
+# Frequenze relative per libro
+word_freq_per_book_rel <- word_freq_per_book %>%
+  group_by(libro) %>%
+  mutate(proportion = n / sum(n)) %>%
+  ungroup()
+
+# Visualizzazione top 10 parole per libro
+word_freq_per_book_rel %>%
+  group_by(libro) %>%
+  slice_max(proportion, n = 10) %>%
+  ungroup() %>%
+  mutate(word = reorder_within(word, proportion, libro)) %>%
+  ggplot(aes(word, proportion, fill = libro)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~libro, scales = "free") +
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Most frequent words per book (relative frequency)",
+       x = NULL,
+       y = "Relative frequency") +
+  theme_minimal()
+
+# Palette ottimale per scegliere il colore più corretto
+palette_wordcloud <- brewer.pal(8, "Set1")
+
+unique_books <- levels(libri_tidy$libro) #individuo i libri
+
+# Loop attraverso i libri nell'ordine corretto
+for (book_title in unique_books) {
+  cat("\n=== Word Cloud for:", book_title, "===\n")
+  
+  book_data <- word_freq_per_book %>%
+    filter(libro == book_title) %>%
+    slice_max(n, n = 100)
+  
+  # Verifica che ci siano dati
+  if (nrow(book_data) > 0) {
+    set.seed(42)
+    wordcloud(words = book_data$word,
+              freq = book_data$n,
+              max.words = 100,
+              random.order = FALSE,
+              rot.per = 0.2,
+              colors = palette_wordcloud,
+              scale = c(4, 0.5))
+  }
+}
+
+#3: calcolo la legge di zipf
+
+# Calcolo rank e term frequency per il dataset complessivo
+zipf_data <- word_frequencies %>%
+  mutate(rank = row_number(),
+         `term frequency` = n / sum(n))
+
+# Plot log-log 
+zipf_data %>%
+  ggplot(aes(rank, `term frequency`)) +
+  geom_line(linewidth = 1.1, alpha = 0.8, color = "red") + 
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(title = "Zipf's law — Murakami corpus",
+       x = "Rank",
+       y = "Term frequency") +
+  theme_minimal()
+
+# Fitting della power law
+rank_subset <- zipf_data %>%
+  filter(rank > 10, rank < 500)
+
+mod <- lm(log10(`term frequency`) ~ log10(rank), data = rank_subset)
+
+# Stampa coefficienti
+cat("\n=== Zipf's law model ===\n")
+cat("Intercept:", mod$coefficients[1], "\n")
+cat("Slope:", mod$coefficients[2], "\n")
+
+# Plot con linea di fitting
+zipf_data %>%
+  ggplot(aes(rank, `term frequency`)) +
+  geom_abline(intercept = mod$coefficients[1],
+              slope = mod$coefficients[2],
+              color = "gray50",
+              linetype = 2,
+              linewidth = 1) +
+  geom_line(linewidth = 1.1, alpha = 0.8, color = "red") +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(title = "Zipf's law with power law fit — Murakami corpus",
+       subtitle = paste0("Slope = ", round(mod$coefficients[2], 3)),
+       x = "Rank",
+       y = "Term frequency") +
+  theme_minimal()
+
+# calcolo la legge di zipf per ogni libro
+zipf_per_book <- word_freq_per_book %>%
+  group_by(libro) %>%
+  mutate(rank = row_number(),
+         `term frequency` = n / sum(n))
+
+zipf_per_book %>%
+  ggplot(aes(rank, `term frequency`, color = libro)) +
+  geom_line(linewidth = 1.1, alpha = 0.8, show.legend = FALSE) +
+  scale_x_log10() +
+  scale_y_log10() +
+  facet_wrap(~libro, scales = "free") +
+  labs(title = "Zipf's law per book",
+       x = "Rank",
+       y = "Term frequency") +
+  theme_minimal()
+
+#4: individuo le parole distintive per ogni libro con tf-idf
+
+book_words <- libri_tidy %>%
+  count(libro, word, sort = TRUE)
+
+# Calcolo tf-idf
+book_words <- book_words %>%
+  bind_tf_idf(word, libro, n)
+
+# Verifica: parole con tf-idf più alto
+cat("\n=== Top tf-idf words across all books ===\n")
+book_words %>%
+  arrange(desc(tf_idf)) %>%
+  print(n = 20)
+
+p_tfidf_parte1 <- book_words %>%
+  filter(libro %in% levels(libro)[1:8]) %>%  
+  group_by(libro) %>%
+  top_n(15, tf_idf) %>%
+  ungroup() %>%
+  mutate(word = reorder_within(word, tf_idf, libro)) %>%
+  ggplot(aes(word, tf_idf, fill = libro)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~libro, ncol = 3, scales = "free") + 
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Distinctive words per book (tf-idf)",
+       x = NULL,
+       y = "tf-idf") +
+  theme_minimal(base_size = 10) + 
+  theme(
+    strip.text = element_text(size = 9, face = "bold"), 
+    axis.text.y = element_text(size = 7),  
+    axis.text.x = element_text(size = 7)
+  )
+
+p_tfidf_parte2 <- book_words %>%
+  filter(libro %in% levels(libro)[9:15]) %>%  
+  group_by(libro) %>%
+  top_n(15, tf_idf) %>%
+  ungroup() %>%
+  mutate(word = reorder_within(word, tf_idf, libro)) %>%
+  ggplot(aes(word, tf_idf, fill = libro)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~libro, ncol = 3, scales = "free") +  
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Distinctive words per book (tf-idf)",
+       x = NULL,
+       y = "tf-idf") +
+  theme_minimal(base_size = 10) +  
+  theme(
+    strip.text = element_text(size = 9, face = "bold"),  
+    axis.text.y = element_text(size = 7),  
+    axis.text.x = element_text(size = 7)
+  )
+
+ print(p_tfidf_parte1)
+ print(p_tfidf_parte2)
+
+```
+
+L’analisi della lunghezza media delle parole evidenzia che il vocabolario di Murakami, anche dopo la rimozione delle stopword, risulta mediamente più complesso rispetto all’inglese standard (4.7-5.5 caratteri). Questo avviene perchè Murakami predilige una scrittura densa, precisa, in cui ogni parola tende a portare con sé un particolare peso semantico.
+
+Osservando l’evoluzione nel tempo, emerge una progressiva maturazione stilistica. I romanzi dell’esordio, come Hear the Wind Sing (5.86 caratteri), mostrano un linguaggio più essenziale e diretto, coerente con l’estetica minimalista degli anni Settanta e con l’influenza del romanzo americano mentre le opere più tarde come 1Q84 (6.24 caratteri) o Killing Commendatore (6.22) mantengono invece una complessità lessicale più elevata e stabile.
+
+Per quanto riguarda le frequenze delle parole, emerge in maniera evidente l'ossessione che Murakami ha per il tempo. La parola time con 6,648 occorrenze domina l’intero corpus e trova eco in termini come day e night che confermano l'importanza che la parola assume durante lo sviluppo della narrativa. 
+Il tempo non viene trattato come un semplice riferimento cronologico, ma come una riflessione esistenziale sulla natura sfuggente del tempo, sulla memoria, sulla perdita e sul rimpianto. 
+Dai mondi paralleli di 1Q84 alla nostalgia dolorosa di Norwegian Wood, il tempo è sempre qualcosa che sfugge, si deforma o ritorna sotto forma di ricordo.
+
+Accanto al tempo, un altro nucleo centrale riguarda la percezione sensoriale e in particolare quella visiva. Parole come eyes (2,275) e looked (2,175) compaiono con frequenza e rimandano a protagonisti contemplativi, osservatori passivi della realtà più che attivi. 
+Nei romanzi di Murakami, lo sguardo diventa spesso un canale di accesso all’interiorità del personaggio, guardare significa cercare un senso alle dinamiche narrate, ma anche un atto di distanza dal mondo.
+
+La triade "people" (2,814), "world" (2,240), "life" (1,900+) evidenzia la vocazione filosofica di Murakami che si concentra su tre temi principali:
+
+Il rapporto tra l'individuo e la collettività ("people")
+La natura della realtà e delle realtà parallele ("world")
+Il senso dell'esistenza ("life")
+
+Questa dimensione universale coesiste con quella intimista, creando il caratteristico equilibrio murakamiano tra quotidiano e metafisico.
+
+Durante l'analisi è evidente il peso rilevante di 1Q84 all’interno del corpus. Essendo uno dei romanzi più lunghi e complessi dell'artista (oltre 1,300 pagine nelle edizioni inglesi), i nomi Tengo e Aomame emergono in modo dominante, riflettendo la struttura duale nel quale i due protagonisti coesistono, costruita su due linee narrative parallele che si rispecchiano e si rincorrono. 
+La ripetizione insistita dei nomi propri, più che dei pronomi, è coerente con una tecnica narrativa che mantiene una certa distanza emotiva, pur insistendo sull’identità individuale dei personaggi.
+
+I word cloud permettono di cogliere visivamente ciò che le frequenze suggeriscono, ogni romanzo possiede una propria identità tematica ben riconoscibile. I primi lavori ruotano attorno a oggetti quotidiani e simboli ricorrenti (bar, sigarette, flipper), 
+
+In After Dark domina la parola time affiancata dal nome Mari, un dato che riflette perfettamente la struttura del romanzo concepito come una lunga notte urbana scandita quasi in tempo reale. 
+
+Norwegian Wood presenta invece una configurazione fortemente relazionale. I nomi Naoko e Midori emergono con peso quasi identico, confermando la centralità del triangolo emotivo che struttura il romanzo. Il lessico è intimo e corporeo, legato alla vita quotidiana e alle relazioni.
+Nel word cloude si nota l’assenza relativa della parola love, mai esplicitata ma costantemente vissuta attraverso memoria, dolore e perdita. 
+
+In Dance Dance Dance, la parola dominante è hotel, a indicare come lo spazio (in particolare il Dolphin Hotel) assuma un ruolo centrale e simbolico. Il romanzo è attraversato da un lessico urbano e percettivo che richiama l’estetica hard-boiled e mette in scena personaggi diversi per età e visione del mondo, accomunati da una profonda alienazione. L’assenza della parola dance sottolinea come il titolo alluda non a un’azione concreta, ma a una condizione esistenziale, il continuare a muoversi senza comprenderne fino in fondo il senso.
+
+Nel loro insieme, queste tre word cloud funzionano come veri e propri ritratti narrativi. After Dark è dominato dal tempo e dall’osservazione, Norwegian Wood dalla memoria e dalle relazioni, Dance Dance Dance dallo spazio urbano e dalla perdita di identità. Le visualizzazioni rendono così immediatamente visibile l’anima di ciascun romanzo.
+
+Dal punto di vista linguistico, l’applicazione della legge di Zipf conferma una notevole coerenza stilistica, nonostante l’arco temporale di oltre quarant’anni e la varietà di temi affrontati, Murakami mantiene una distribuzione lessicale sorprendentemente uniforme. Questo suggerisce che ciò che cambia radicalmente da un romanzo all’altro non è tanto il linguaggio di base, quanto l’universo narrativo che quel linguaggio abita.
+Nel caso di Murakami, lo slope meno ripido (-0.544) indica che la distribuzione delle frequenze decade più lentamente del previsto e questo perchè lo stile di murakami è molto minimalista.
+
+Infine, l’analisi TF-IDF rafforza questa intuizione, le parole che distinguono maggiormente i romanzi tra loro sono quasi sempre i nomi dei personaggi. Murakami utilizza lo stesso vocabolario fondamentale per raccontare storie molto diverse, sono i personaggi, con i loro nomi e le loro ossessioni, a definire l’identità di ciascun libro. 
+
+Murakami costruisce un universo linguistico riconoscibile, all’interno del quale ogni romanzo rappresenta una nuova declinazione di temi, simboli e personaggi. È proprio questo che rendere le sue opere così immediatamente identificabili e rappresentative. 
+
+# 2. N-GRAMMI E CO-OCCORRENZE
+
+```{r n-grammi}
+
+# 1: BIGRAMMI
+
+# Tokenizzazione in bigrammi 
+bigrams <- dfM %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2) %>%
+  filter(!is.na(bigram))
+
+bigrams_separated <- bigrams %>%
+  separate(bigram, c("word1", "word2"), sep = " ")
+
+bigrams_filtered <- bigrams_separated %>%
+  filter(!word1 %in% stop_words$word,
+         !word2 %in% stop_words$word)
+
+bigram_counts <- bigrams_filtered %>%
+  count(word1, word2, sort = TRUE)
+
+cat("\n=== Top 20 bigrams (corpus) ===\n")
+print(bigram_counts, n = 20)
+
+# Ricostruisci bigrammi come stringa 
+bigrams_united <- bigrams_filtered %>%
+  unite(bigram, word1, word2, sep = " ")
+
+bigram_counts_per_book <- bigrams_united %>%
+  count(libro, bigram, sort = TRUE)
+
+#visualizzazzione dei bigrammi
+p_bigrams_parte1 <- bigram_counts_per_book %>%
+  filter(libro %in% levels(libro)[1:8]) %>%
+  group_by(libro) %>%
+  top_n(10, n) %>%
+  ungroup() %>%
+  mutate(bigram = reorder_within(bigram, n, libro)) %>%
+  ggplot(aes(bigram, n, fill = libro)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~libro, scales = "free", ncol = 3) +  
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Most frequent bigrams per book",
+       x = NULL, 
+       y = "Count") +
+  theme_minimal(base_size = 10) +
+  theme(
+    strip.text = element_text(size = 9, face = "bold"), 
+    axis.text.y = element_text(size = 7),  
+    axis.text.x = element_text(size = 7)
+  )
+
+p_bigrams_parte2 <- bigram_counts_per_book %>%
+  filter(libro %in% levels(libro)[9:15]) %>%
+  group_by(libro) %>%
+  top_n(10, n) %>%
+  ungroup() %>%
+  mutate(bigram = reorder_within(bigram, n, libro)) %>%
+  ggplot(aes(bigram, n, fill = libro)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~libro, scales = "free", ncol = 3) +  
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Most frequent bigrams per book",
+       x = NULL, 
+       y = "Count") +
+  theme_minimal(base_size = 10) +
+  theme(
+    strip.text = element_text(size = 9, face = "bold"), 
+    axis.text.y = element_text(size = 7),  
+    axis.text.x = element_text(size = 7)
+  )
+
+print(p_bigrams_parte1)
+print(p_bigrams_parte2)
+
+# 2. TRIGRAMMI
+
+trigrams <- dfM %>%
+  unnest_tokens(trigram, text, token = "ngrams", n = 3) %>%
+  filter(!is.na(trigram)) %>%
+  separate(trigram, c("word1", "word2", "word3"), sep = " ") %>%
+  filter(!word1 %in% stop_words$word,
+         !word2 %in% stop_words$word,
+         !word3 %in% stop_words$word) %>%
+  unite(trigram, word1, word2, word3, sep = " ")
+
+trigram_counts_per_book <- trigrams %>%
+  count(libro, trigram, sort = TRUE)
+
+cat("\n=== Top 20 trigrams (corpus) ===\n")
+trigrams %>%
+  count(trigram, sort = TRUE) %>%
+  print(n = 20)
+
+#visualizzazione istogramma
+p_trigrams_parte1 <- trigram_counts_per_book %>%
+  filter(libro %in% levels(libro)[1:8]) %>%
+  group_by(libro) %>%
+  top_n(5, n) %>%
+  ungroup() %>%
+  mutate(trigram = reorder_within(trigram, n, libro)) %>%
+  ggplot(aes(trigram, n, fill = libro)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~libro, scales = "free", ncol = 3) +  
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Most frequent trigrams per book",
+       x = NULL, 
+       y = "Count") +
+  theme_minimal(base_size = 10) +
+  theme(
+    strip.text = element_text(size = 9, face = "bold"), 
+    axis.text.y = element_text(size = 7),  
+    axis.text.x = element_text(size = 7)
+  )
+
+p_trigrams_parte2 <- trigram_counts_per_book %>%
+  filter(libro %in% levels(libro)[9:15]) %>%
+  group_by(libro) %>%
+  top_n(5, n) %>%
+  ungroup() %>%
+  mutate(trigram = reorder_within(trigram, n, libro)) %>%
+  ggplot(aes(trigram, n, fill = libro)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~libro, scales = "free", ncol = 3) +  
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Most frequent trigrams per book",
+       x = NULL, 
+       y = "Count") +
+  theme_minimal(base_size = 10) +
+  theme(
+    strip.text = element_text(size = 9, face = "bold"), 
+    axis.text.y = element_text(size = 7),  
+    axis.text.x = element_text(size = 7)
+  )
+
+print(p_trigrams_parte1)
+print(p_trigrams_parte2)
+
+# 3. TF-IDF DEI BIGRAMMI
+bigram_tf_idf <- bigrams_united %>%
+  count(libro, bigram) %>%
+  bind_tf_idf(bigram, libro, n) %>%
+  arrange(desc(tf_idf))
+
+cat("\n=== Top bigrams by tf-idf ===\n")
+print(bigram_tf_idf, n = 20)
+
+# Visualizzazione tf-idf bigrammi
+p_bigram_tfidf_1 <- bigram_tf_idf %>%
+  filter(libro %in% levels(libro)[1:8]) %>%
+  group_by(libro) %>%
+  top_n(12, tf_idf) %>%
+  ungroup() %>%
+  mutate(bigram = reorder_within(bigram, tf_idf, libro)) %>%
+  ggplot(aes(bigram, tf_idf, fill = libro)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~libro, ncol = 3, scales = "free") +
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Distinctive bigrams per book (tf-idf)",
+       x = NULL, y = "tf-idf") +
+  theme_minimal(base_size = 9) +
+  theme(
+    axis.text.y = element_text(size = 6),
+    strip.text = element_text(size = 8, face = "bold")
+  )
+
+p_bigram_tfidf_2 <- bigram_tf_idf %>%
+  filter(libro %in% levels(libro)[9:15]) %>%
+  group_by(libro) %>%
+  top_n(12, tf_idf) %>%
+  ungroup() %>%
+  mutate(bigram = reorder_within(bigram, tf_idf, libro)) %>%
+  ggplot(aes(bigram, tf_idf, fill = libro)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~libro, ncol = 3, scales = "free") +
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Distinctive bigrams per book (tf-idf)",
+       x = NULL, y = "tf-idf") +
+  theme_minimal(base_size = 9) +
+  theme(
+    axis.text.y = element_text(size = 6),
+    strip.text = element_text(size = 8, face = "bold")
+  )
+
+print(p_bigram_tfidf_1)
+print(p_bigram_tfidf_2)
+
+# 4. GRAFI DEI BIGRAMMI 
+a <- grid::arrow(type = "closed", length = unit(.15, "inches"))
+
+# Grafo complessivo
+cat("\n=== Creating bigram network graph ===\n")
+
+bigram_graph <- bigram_counts %>%
+  filter(n > 50) %>% 
+  as_tbl_graph()
+
+p_graph_all <- ggraph(bigram_graph, layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n), 
+                 show.legend = FALSE,
+                 arrow = a, 
+                 end_cap = circle(.07, 'inches')) +
+  geom_node_point(color = "steelblue", size = 3) +
+  geom_node_text(aes(label = name), 
+                 vjust = 1.5, hjust = 1, 
+                 size = 3, check_overlap = TRUE) +
+  theme_void() +
+  labs(title = "Bigram network — Murakami corpus (n > 50)")
+
+print(p_graph_all)
+
+# Grafi PER LIBRO
+
+libri_esempio <- c("5-Norwegian wood",
+                   "6-Dance Dance Dance",
+                   "11-After Dark", 
+                   "12-1Q84")
+
+for (book_title in libri_esempio) {
+  
+  cat("\n--- Bigram graph:", book_title, "---\n")
+  
+  
+  book_bigrams <- bigrams_filtered %>%
+    filter(libro == book_title) %>%
+    count(word1, word2, sort = TRUE)
+  
+  book_graph <- book_bigrams %>%
+    filter(n > 10) %>% 
+    as_tbl_graph()
+  
+  p <- ggraph(book_graph, layout = "fr") +
+    geom_edge_link(aes(edge_alpha = n), 
+                   show.legend = FALSE,
+                   arrow = a, 
+                   end_cap = circle(.07, 'inches')) +
+    geom_node_point(color = "lightblue", size = 4) +
+    geom_node_text(aes(label = name), 
+                   vjust = 1.5, hjust = 1, 
+                   size = 3.5, check_overlap = TRUE) +
+    theme_void() +
+    labs(title = paste("Bigram network —", book_title))
+  
+  print(p)
+}
+
+
+# 5. CO-OCCORRENZE 
+# Co-occorrenze complessiva
+section_words <- libri_tidy %>%
+  mutate(section = row_number() %/% 10) %>%
+  filter(section > 0)
+
+word_pairs_raw <- section_words %>%
+  pairwise_count(word, section, sort = TRUE, upper = FALSE)
+
+cat("\n=== Top 20 word co-occurrences (deduplicated) ===\n")
+print(word_pairs_raw, n = 20)
+
+#grafo complessivo
+p_cooc_all <- word_pairs_raw %>%
+  filter(n > 50) %>%
+  as_tbl_graph(directed = FALSE) %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n), show.legend = FALSE) +
+  geom_node_point(color = "steelblue", size = 3) +
+  geom_node_text(aes(label = name), 
+                 repel = TRUE, size = 3, 
+                 max.overlaps = 15) +
+  theme_void() +
+  labs(title = "Word co-occurrence network — Murakami corpus (n > 50)")
+
+print(p_cooc_all)
+
+# Co-occorrenze PER LIBRO 
+for (book_title in libri_esempio) {
+  
+  cat("\n--- Co-occurrence:", book_title, "---\n")
+  
+  book_sections <- libri_tidy %>%
+    filter(libro == book_title) %>%
+    mutate(section = row_number() %/% 10) %>%
+    filter(section > 0)
+  
+  book_pairs_raw <- book_sections %>%
+    pairwise_count(word, section, sort = TRUE)
+  
+  book_pairs <- book_pairs_raw %>%
+    mutate(
+      word_a = if_else(item1 < item2, item1, item2),
+      word_b = if_else(item1 < item2, item2, item1)
+    ) %>%
+    group_by(word_a, word_b) %>%
+    summarise(n = sum(n), .groups = "drop") %>%
+    rename(item1 = word_a, item2 = word_b) %>%
+    arrange(desc(n))
+ 
+  book_pairs_top <- book_pairs %>%
+    slice_max(n, n = 40)
+  
+
+  p <- book_pairs_top %>%
+    filter(n > 15) %>%  # 
+    as_tbl_graph(directed = FALSE) %>%
+    ggraph(layout = "fr") +
+    geom_edge_link(aes(edge_alpha = n, edge_width = n), 
+                   show.legend = FALSE,
+                   color = "gray70") + 
+    geom_node_point(color = "steelblue", size = 5) + 
+    geom_node_text(aes(label = name), 
+                   repel = TRUE, 
+                   size = 4,  
+                   max.overlaps = 20, 
+                   force = 2, 
+                   box.padding = 0.5) + 
+    theme_void() +
+    labs(title = paste("Co-occurrence network —", book_title),
+         subtitle = "(Top 40 pairs, n > 15)")
+  
+  print(p)
+}
+
+
+# 6. CORRELAZIONI (PHI COEFFICIENT)
+
+for (book_title in libri_esempio) {
+  
+  cat("\n--- Correlations:", book_title, "---\n")
+  
+  book_sections <- libri_tidy %>%
+    filter(libro == book_title) %>%
+    mutate(section = row_number() %/% 10) %>%
+    filter(section > 0)
+  
+  # Filtra parole frequenti (almeno 20 occorrenze)
+  word_cors <- book_sections %>%
+    group_by(word) %>%
+    filter(n() >= 20) %>%
+    ungroup() %>%
+    pairwise_cor(word, section, sort = TRUE)
+  
+  # Grafo correlazioni
+  p <- word_cors %>%
+    filter(correlation > .20) %>%  
+    as_tbl_graph(directed = FALSE) %>%
+    ggraph(layout = "fr") +
+    geom_edge_link(aes(edge_alpha = correlation), 
+                   show.legend = FALSE) +
+    geom_node_point(color = "lightblue", size = 4) +
+    geom_node_text(aes(label = name), 
+                   repel = TRUE, size = 3.5,
+                   max.overlaps = 15) +
+    theme_void() +
+    labs(title = paste("Word correlation network —", book_title))
+  
+  print(p)
+}
+
+```
+
+L’analisi di bigrammi, trigrammi e co-occorrenze mostra con chiarezza che la narrativa di Murakami non è costruita solo a livello tematico, ma anche attraverso formule linguistiche ricorrenti. I bigrammi sono coppie di parole consecutive che, analizzate insieme, rivelano pattern narrativi e stilistici e i bigrammi più frequenti nel corpus confermano la centralità dei nomi composti dei personaggi – Fuka Eri (712), Miss Saeki, Noboru Wataya, Dolphin Hotel – che funzionano come veri e propri nuclei semantici. I nomi diventano presenze rituali e la loro ripetizione costruisce familiarità, ossessione e identità.
+
+Accanto ai nomi emergono espressioni corporee e temporali estremamente regolari: shook head, closed eyes, deep breath (141), ten minutes (109), time ago (105). Il corpo, in Murakami, è il primo strumento narrativo: i personaggi non spiegano ciò che provano, lo manifestano attraverso gesti minimi e ripetitivi. Allo stesso tempo, il tempo è quasi sempre misurato, cronometrico, mai astratto. Questo ancoraggio numerico e fisico rende credibile anche il fantastico, creando quell’iperrealismo che permette all’assurdo di apparire naturale.
+
+Quando si osservano i bigrammi distintivi per romanzo, emergono identità narrative molto nette. Norwegian Wood è l’unico testo in cui compaiono con forza relazioni familiari e riferimenti quotidiani concreti( negozi di dischi, domeniche mattina, figure paterne). 
+1Q84, al contrario, costruisce universi simbolici autonomi, popolati da personaggi-metafora e oggetti magici (La ripetizione ossessiva di "fuka eri" riflette il suo ruolo di enigma irrisolvibile attorno a cui ruota la narrazione). 
+Dance Dance Dance ruota ossessivamente attorno a un unico spazio, l’hotel, che diventa un labirinto psicologico, una metafora dell'inconscio.
+
+I trigrammi rafforzano questa impressione. Murakami utilizza vere e proprie frasi-pattern che condensano personaggi, oggetti e concetti. Alter ego come boy named Crow, soprannomi pop come yellow submarine boy, o descrizioni iper-specifiche come white Subaru Forester mostrano una scrittura che combina cultura pop, precisione maniacale e simbolismo. 
+Anche qui il gesto corporeo ritorna come forma primaria di comunicazione, Fuka-Eri che annuisce o scuote la testa rappresenta una soggettività che si esprime senza parole.
+
+I grafi delle co-occorrenze mostrano quali parole compaiono frequentemente insieme nello stesso contesto. I testi realistici, come Norwegian Wood, presentano grafi più lineari e sparsi, mentre quelli fantastici (1Q84) generano reti dense, multi-centrate, quasi labirintiche. In tutti i casi, però, emerge un core lessicale condiviso (tempo, sguardo, corpo, mondo) attorno al quale si organizzano costellazioni specifiche di ogni romanzo.
+
+L’analisi delle correlazioni tramite coefficiente phi consente di andare oltre la semplice frequenza misurando l'affinità statistica tra coppie di parole, cioè coppie di termini che tendono a comparire insieme in modo sistematico e non casuale.
+Norwegian Wood è dominato da correlazioni quotidiane e rituali, che ancorano la narrazione a un realismo emotivo. In Dance Dance Dance prevalgono legami spaziali e architettonici, con l’hotel come centro simbolico dell’alienazione urbana.  1Q84 mostra invece correlazioni simboliche e meta-narrative, dove nomi, oggetti e concetti costruiscono mondi autonomi e riflettono sulla natura stessa della finzione.
+
+In questo contesto After Dark rappresenta un caso limite. 
+Ambientato interamente in una sola notte, i grafi dei bigrammi sono frammentati. Non emergono luoghi mitici ricorrenti, né nomi ripetuti in modo ossessivo. After Dark è costruito come una sequenza di scene brevi, quasi cinematografiche, osservate da una “telecamera” impersonale.
+
+La co-occorrenza delle parole rivela una forte coerenza tematica. 
+Mari è l’unico vero hub del romanzo, è il punto di vista mobile che attraversa la notte e incontra personaggi diversi, ognuno dei quali resta confinato nel proprio episodio. 
+Eri invece, pur essendo centrale sul piano simbolico, rimane periferica sul piano relazionale perché dorme. Il suo mondo è quello dell’inconscio ed mediato dalla televisione che rappresenta l'unico vero elemento fantastico del romanzo. La fortissima correlazione tra tv e screen conferma che la TV non è un oggetto, ma un portale tra realtà e altrove.
+
+Un altro elemento dominante è il tempo. After Dark è scandito minuto per minuto: i numeri emergono isolati nei grafi, come se il tempo stesso fosse un personaggio silenzioso che sorveglia la narrazione. A differenza di 1Q84, dove il tempo è filosofico e metafisico, qui è materiale, implacabile, misurabile. Il risultato è una tensione costante tra movimento e immobilità. Mari vaga nella città, Eri resta immobile nel sonno.
+
+Gli oggetti quotidiani – una chicken salad, una jacket pocket, un tavolo – assumono un peso sproporzionato, diventando ancore di realtà in un’atmosfera sospesa. 
+
+Le correlazioni sono deboli, disperse, episodiche. Non esiste una vera rete unificante, ma una serie di vignette notturne che si sfiorano senza fondersi.
+
+# 3. ANALISI SENTIMENTALE
+
+```{r sentimenti}
+
+# 1. LEXICON DISPONIBILI
+
+#   - bing: sentiment binario (positive/negative)
+#   - AFINN: score numerico da -5 a +5
+#   - nrc: 8 emozioni base + 2 poli di sentiment
+
+get_sentiments("bing")
+get_sentiments("afinn")
+get_sentiments("nrc")
+
+
+# 2. PAROLE DI GIOIA PER OGNI LIBRO
+
+#parole di joy per il dataframe complessivo
+nrc_joy <- get_sentiments("nrc") %>%
+  filter(sentiment == "joy")
+
+# Parole di gioia più frequenti per libro
+libri_tidy %>%
+  filter(libro %in% levels(libro)[1:8]) %>%
+  inner_join(nrc_joy) %>%
+  count(libro, word, sort = TRUE) %>%
+  group_by(libro) %>%
+  slice_max(n, n = 10) %>%
+  ungroup() %>%
+  mutate(word = reorder_within(word, n, libro)) %>%
+  ggplot(aes(word, n, fill = libro)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~libro, scales = "free", ncol = 3) +
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Most common joy words per book (NRC lexicon)",
+       x = NULL,
+       y = "Count")
+
+libri_tidy %>%
+  filter(libro %in% levels(libro)[9:15]) %>%
+  inner_join(nrc_joy) %>%
+  count(libro, word, sort = TRUE) %>%
+  group_by(libro) %>%
+  slice_max(n, n = 10) %>%
+  ungroup() %>%
+  mutate(word = reorder_within(word, n, libro)) %>%
+  ggplot(aes(word, n, fill = libro)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~libro, scales = "free", ncol = 3) +
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Most common joy words per book (NRC lexicon)",
+       x = NULL,
+       y = "Count")
+
+# 3. SENTIMENT NEL TEMPO PER OGNI LIBRO
+murakami_sentiment <- libri_tidy %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(libro, index = linea %/% 80, sentiment) %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+
+murakami_sentiment
+
+# Visualizzazione sentiment nel tempo per ogni libro
+ggplot(murakami_sentiment, aes(index, sentiment, fill = libro)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~libro, ncol = 3, scales = "free_x") +
+  labs(title = "Sentiment over time per book (Bing lexicon)",
+       x = "Section of book",
+       y = "Sentiment (positive - negative)")
+
+
+# 4. PAROLE CHE CONTRIBUISCONO MAGGIORMENTE AL SENTIMENT
+
+bing_word_counts <- libri_tidy %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+bing_word_counts
+
+# Visualizzazione top 10 parole per sentiment nel corpus complessivo
+bing_word_counts %>%
+  group_by(sentiment) %>%
+  top_n(10) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(title = "Words contributing most to sentiment — Murakami corpus",
+       y = "Contribution to sentiment",
+       x = NULL) +
+  coord_flip()
+
+
+# 5. PAROLE CHE CONTRIBUISCONO AL SENTIMENT PER LIBRO
+
+libri_tidy %>%
+  filter(libro %in% levels(libro)[1:8]) %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(libro, word, sentiment, sort = TRUE) %>%
+  group_by(libro, sentiment) %>%
+  top_n(5) %>%
+  ungroup() %>%
+  mutate(word = reorder_within(word, n, libro)) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~libro, scales = "free", ncol = 3) +
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Top sentiment words per book",
+       y = "Count",
+       x = NULL)
+
+
+libri_tidy %>%
+  filter(libro %in% levels(libro)[9:15]) %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(libro, word, sentiment, sort = TRUE) %>%
+  group_by(libro, sentiment) %>%
+  top_n(5) %>%
+  ungroup() %>%
+  mutate(word = reorder_within(word, n, libro)) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~libro, scales = "free", ncol = 3) +
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Top sentiment words per book",
+       y = "Count",
+       x = NULL)
+
+
+# 6. CAPITOLI PIU' NEGATIVI PER OGNI LIBRO
+# Definisco i libri da analizzare
+libri_con_capitoli <- c(
+  "1-Hear the Wind Sing",
+  "2-Pinball, 1973", 
+  "7-South of the Border West of the Sun",
+  "4-Hard Boiled Wonderland and the End of the World",
+  "9-Sputnik Sweetheart",
+  "10-Kafka On The Shore",
+  "14-Killing Commendatore"
+)
+
+# Crea dataset con colonna chapter 
+libri_con_chapter <- dfM %>%
+  filter(libro %in% libri_con_capitoli) %>%
+  group_by(libro) %>%
+  mutate(chapter = case_when(
+    # Gruppo 1: Solo numero all'inizio (1, 2, 3...)
+    libro %in% c("1-Hear the Wind Sing", 
+                 "2-Pinball, 1973",
+                 "4-Hard Boiled Wonderland and the End of the World",
+                 "14-Killing Commendatore") ~ 
+      cumsum(str_detect(text, regex("^[0-9]+", ignore_case = TRUE))),
+    
+    # Gruppo 2: Numero attaccato a parola (1My, 2In, 15I...)
+    libro == "7-South of the Border West of the Sun" ~
+      cumsum(str_detect(text, regex("^[0-9]+[A-Z]", ignore_case = FALSE))),
+    
+    # Gruppo 3: "CHAPTER" seguito da numero (CHAPTER 1, CHAPTER 16...)
+    libro %in% c("9-Sputnik Sweetheart", "10-Kafka On The Shore") ~
+      cumsum(str_detect(text, regex("^chapter [0-9]+", ignore_case = TRUE))),
+    
+    TRUE ~ 0
+  )) %>%
+  ungroup()
+
+cat("\n=== Capitoli identificati per libro ===\n")
+libri_con_chapter %>%
+  group_by(libro) %>%
+  summarise(chapters = max(chapter)) %>%
+  arrange(desc(chapters)) %>%
+  print()
+
+# Tokenizza solo questi libri
+libri_chapter_tidy <- libri_con_chapter %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words) %>%
+  filter(chapter > 0)  
+
+# Analisi capitoli più negativi
+bingnegative <- get_sentiments("bing") %>%
+  filter(sentiment == "negative")
+
+# Conta parole totali per libro e capitolo
+wordcounts <- libri_chapter_tidy %>%
+  group_by(libro, chapter) %>%
+  summarize(words = n(), .groups = "drop")
+
+# Trova i capitoli più negativi per libro
+capitoli_negativi <- libri_chapter_tidy %>%
+  semi_join(bingnegative) %>%
+  group_by(libro, chapter) %>%
+  summarize(negativewords = n(), .groups = "drop") %>%
+  left_join(wordcounts, by = c("libro", "chapter")) %>%
+  mutate(ratio = negativewords / words) %>%
+  group_by(libro) %>%
+  slice_max(ratio, n = 1) %>%
+  ungroup() %>%
+  arrange(desc(ratio))
+
+capitoli_negativi
+
+# Visualizzazione capitoli più negativi
+capitoli_negativi %>%
+  mutate(libro = fct_reorder(libro, ratio)) %>%
+  ggplot(aes(libro, ratio, fill = libro)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(aes(label = paste("Ch.", chapter)), hjust = -0.1, size = 3) +
+  coord_flip() +
+  labs(title = "Most negative chapter per book",
+       subtitle = "Only books with identifiable chapter structure",
+       x = NULL,
+       y = "Ratio of negative words") +
+  theme_bw()
+
+
+
+# 7. SENTIMENT MEDIO PER LIBRO (AFINN)
+
+libri_tidy %>%
+  inner_join(get_sentiments("afinn")) %>%
+  group_by(libro) %>%
+  summarize(mean_sentiment = mean(value)) %>%
+  arrange(mean_sentiment) %>%
+  mutate(libro = fct_reorder(libro, mean_sentiment)) %>%
+  ggplot(aes(libro, mean_sentiment, fill = mean_sentiment > 0)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  labs(title = "Average sentiment per book (AFINN lexicon)",
+       x = NULL,
+       y = "Mean sentiment score")
+
+```
+
+L’analisi delle joy words basata sul lexicon NRC mostra con chiarezza che nei testi di Murakami, la felicità non è mai un’emozione esplicitamente dichiarata, ma anzi come un concetto debole, indiretto e ambiguo. Le parole classificate come “gioiose” non rimandano a stati di felicità pienamente vissuti, ma a qualità estetiche, gesti minimi, momenti sospesi o forme di accettazione passiva dell’esperienza.
+
+La caratteristica però non è tanto la poca presenza di termini positivi, quanto l'assenza sistematica del termine "felicità" esplicito. Parole come happy, happiness o joy risultano rare o del tutto assenti dalle posizioni più frequenti, confermando che Murakami evita consapevolmente la nominazione diretta della felicità. Questo dato è coerente con la sua poetica, che oscilla stabilmente tra neutralità emotiva, malinconia e oscurità, senza mai approdare a una gioia pienamente affermata.
+
+Le parole ricorrenti identificate come “gioiose” (pretty, love, smile, fine) hanno una bassa intensità emotiva, un forte ancoraggio al corpo o al quotidiano e una totale assenza di euforia. Si tratta di termini che descrivono stati lievi, momentanei, spesso privi di una dimensione trasformativa. Questo suggerisce che la gioia, nel corpus murakamiano, sia attenuata, transitoria e frequentemente retrospettiva (un residuo fragile di un’esperienza già perduta).
+
+Questa concezione emerge con particolare chiarezza in Norwegian Wood, il romanzo che statisticamente contiene il maggior numero di parole di gioia (ma che non è il più positivo). Qui love (con oltre 100 occorrenze) domina il lessico positivo, insieme a pretty e beautiful, cosa che però entra in completa contraddizione con il tono complessivo del romanzo che resta profondamente triste. Si parla d’amore mentre tutto va in pezzi. in questo contesto love non è promessa di felicità ma accompagna il trauma (suicidi, depressione, lutto) ed è considerato come un preludio alla perdita. 
+
+In 1Q84, invece, pretty domina il lessico (circa 250 occorrenze), soprattutto in riferimento a Fuka-Eri, figura bellissima e inafferrabile, mentre love convive con parole come friend e fine. Non c’è passione travolgente, ma una felicità possibile, costruita lentamente, quasi con diffidenza.
+Questo tra l'altro è l’unico romanzo che mostra una vera tendenza positiva finale concludendo con il ricongiungimento di Tengo e Aomame. La dinamica può essere vista come una sorta di fiaba adulta dopo centinaia di pagine di oscurità.
+
+Al polo opposto si colloca The Wind-Up Bird Chronicle, dove le parole di gioia sono decisamente poche rispetto alla lunghezza del testo (max ~150). Qui la violenza storica, il trauma e la discesa nell’inconscio sovrastano qualsiasi spiraglio luminoso. Il sentimento resta costantemente negativo, confermando che si tratta del romanzo più cupo e disturbante di Murakami. Anche quando compaiono termini positivi, questi vengono assorbiti da un contesto di guerra, perdita e disintegrazione personale.
+
+Guardando l’andamento del sentiment nel tempo, tutti i romanzi mostrano un sentiment che fluttua tra -0.25 e +0.25, raramente superando questi limiti e questo può essere visto come un assenza sistematica di ambiguità emotiva. 
+Luce e ombra coesistono senza mai annullarsi. After Dark, ad esempio, resta quasi neutro per tutta la sua durata e infatti può essere considerato come un romanzo che osserva, non giudica, che registra la notte senza attribuirle un significato morale.
+
+Le parole negative più frequenti – hard, dark, lost, strange – definiscono il cuore emotivo dell’opera murakamiana. hard (≈1280 occorrenze) indica difficoltà esistenziale, non male morale. La vita, nei suoi romanzi, non è malvagia, è difficile. Non c’è un nemico da combattere, ma una fatica continua dell’esistere. 
+La coppia dark/darkness (≈1495 occorrenze) domina il lessico negativo, confermando l’ossessione per l’oscurità fisica e metaforica. Il rapporto 2:1 con light segnala una asimmetria strutturale.
+Lost esprime lo stato permanente dei protagonisti, sempre smarriti, senza mappe né direzioni chiare. Strange, infine, normalizza il surreale infatti di fronte a due lune nel cielo o a gatti che parlano, i personaggi non reagiscono con terrore, ma con un semplice “è strano”, accettando l’anomalia come parte del reale.
+
+Le parole positive risultano profondamente ambigue. Termini come quiet o silent, classificati come positivi dai dizionari, in Murakami assumono spesso una tonalità inquietante. Il silenzio non è pace, ma vuoto; la quiete può essere sospensione prima di qualcosa di oscuro.
+
+Nel complesso, la classifica finale del sentiment medio conferma che Murakami non scrive mai romanzi davvero felici. Anche il più “positivo”, Colorless Tsukuru Tazaki, supera di poco lo zero, suggerendo non tanto una gioia piena quanto una riconciliazione malinconica con il passato. Dai primi romanzi nichilisti fino alle opere più mature, l’autore sembra spostarsi non verso la felicità, ma verso una forma più gentile di tristezza.
+
+Murakami rappresenta un equilibrio instabile tra luce e ombra, in cui la felicità non è mai gridata, ma sussurrata, spesso proprio nei momenti in cui sta per svanire.
+
+# 4. NETWORK ANALYSIS
+
+```{r grafi}
+
+# COSTRUZIONE DELLA RETE GLOBALE
+
+cat("\n=== 1. GLOBAL LEXICAL NETWORK CONSTRUCTION ===\n\n")
+
+
+# Calcola co-occorrenze doppie (pairwise count)
+word_pairs <- section_words %>%
+  pairwise_count(word, section, sort = TRUE) %>%
+  filter(n > 100) 
+
+cat("Total word pairs (n > 100):", nrow(word_pairs), "\n")
+cat("Sample pairs:\n")
+print(head(word_pairs, 10))
+
+# Crea grafo non diretto
+g <- word_pairs %>%
+  as_tbl_graph(directed = FALSE)
+
+cat("\nNetwork size:\n")
+cat("- Nodes (words):", vcount(g), "\n")
+cat("- Edges (co-occurrences):", ecount(g), "\n")
+cat("- Density:", round(edge_density(g), 4), "\n\n")
+
+#calcolo di tutte le componenti presenti
+cat("\n=== 2. CONNECTED COMPONENTS ===\n\n")
+
+components_list <- components(g)
+
+cat("Graph connectivity:\n")
+cat("- Number of components:", components_list$no, "\n")
+cat("- Size of largest component:", max(components_list$csize), "\n")
+cat("- All component sizes:", components_list$csize, "\n\n")
+
+giant_component <- induced_subgraph(g, which(components_list$membership == which.max(components_list$csize)))
+
+cat("Largest connected component:\n")
+cat("- Nodes:", vcount(giant_component), "\n")
+cat("- Edges:", ecount(giant_component), "\n")
+cat("- Density:", round(edge_density(giant_component), 4), "\n\n")
+
+
+
+# 2. DEGREE CENTRALITY
+
+cat("\n=== 2. DEGREE CENTRALITY ===\n\n")
+
+degree_igraph <- degree(g)
+
+# Crea dataframe risultati
+degree_df <- tibble(
+  word = V(g)$name,
+  degree = degree_igraph
+) %>%
+  arrange(desc(degree))
+
+cat("Top 20 words by degree centrality:\n")
+print(degree_df %>% head(20))
+
+# Visualizzazione
+degree_df %>%
+  head(20) %>%
+  mutate(word = reorder(word, degree)) %>%
+  ggplot(aes(word, degree)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Degree Centrality — Murakami Lexical Network",
+       subtitle = "Most connected words (lexical hubs)",
+       x = NULL, y = "Degree (number of co-occurring words)") +
+  theme_minimal()
+
+# 3. CLOSENESS CENTRALITY
+
+cat("\n\n=== 3. CLOSENESS CENTRALITY ===\n\n")
+
+closeness_scores <- closeness(giant_component)
+
+closeness_df <- tibble(
+  word = V(giant_component)$name,
+  closeness = closeness_scores
+) %>%
+  arrange(desc(closeness))
+
+
+cat("Top 20 words by closeness centrality:\n")
+print(closeness_df %>% head(20))
+
+# Visualizzazione
+closeness_df %>%
+  head(20) %>%
+  mutate(word = reorder(word, closeness)) %>%
+  ggplot(aes(word, closeness)) +
+  geom_col(fill = "coral") +
+  coord_flip() +
+  labs(title = "Closeness Centrality — Murakami Lexical Network",
+       subtitle = "Words with shortest average distance to others",
+       x = NULL, y = "Closeness") +
+  theme_minimal()
+
+# 4. BETWEENNESS CENTRALITY
+
+cat("\n\n=== 4. BETWEENNESS CENTRALITY ===\n\n")
+
+betweenness_scores <- betweenness(g)
+
+betweenness_df <- tibble(
+  word = V(g)$name,
+  betweenness = betweenness_scores
+) %>%
+  arrange(desc(betweenness))
+
+cat("Top 20 words by betweenness centrality:\n")
+print(betweenness_df %>% head(20))
+
+# Visualizzazione
+betweenness_df %>%
+  head(20) %>%
+  mutate(word = reorder(word, betweenness)) %>%
+  ggplot(aes(word, betweenness)) +
+  geom_col(fill = "darkgreen") +
+  coord_flip() +
+  labs(title = "Betweenness Centrality — Murakami Lexical Network",
+       subtitle = "Words that bridge different semantic regions",
+       x = NULL, y = "Betweenness") +
+  theme_minimal()
+
+# Combina tutte le centralità
+centrality_all <- degree_df %>%
+  left_join(closeness_df, by = "word") %>%
+  left_join(betweenness_df, by = "word")
+
+
+# 5. NETWORK VISUALIZATION
+
+cat("\n\n=== 5. NETWORK VISUALIZATION ===\n\n")
+
+set.seed(42)
+coords <- layout_with_fr(g)
+
+# Plot colorato per degree
+plot(g, layout = coords,
+     vertex.size = sqrt(degree(g)) * 1.5,
+     vertex.color = "lightblue",
+     vertex.label = ifelse(degree(g) > quantile(degree(g), 0.95), 
+                           V(g)$name, NA),
+     vertex.label.cex = 0.7,
+     vertex.label.color = "black",
+     edge.width = 0.3,
+     edge.color = "gray80",
+     main = "Murakami Lexical Network — Node size = Degree")
+
+# Plot con ggraph
+set.seed(42)
+ggraph(g, layout = "fr") +
+  geom_edge_link(alpha = 0.1, color = "gray70") +
+  geom_node_point(aes(size = degree(g), color = betweenness(g)), alpha = 0.7) +
+  geom_node_text(aes(label = name, 
+                     filter = degree(g) > quantile(degree(g), 0.95)),
+                 repel = TRUE, size = 3, max.overlaps = 20) +
+  scale_color_viridis_c(option = "plasma") +
+  scale_size_continuous(range = c(1, 8)) +
+  theme_void() +
+  labs(title = "Murakami Lexical Network",
+       subtitle = "Node size = Degree | Color = Betweenness",
+       color = "Betweenness", size = "Degree")
+
+
+# 6. COMMUNITY DETECTION
+
+cat("\n\n=== 6. COMMUNITY DETECTION ===\n\n")
+
+# Modularity matrix
+m <- ecount(g)
+k <- degree(g)
+n <- vcount(g)
+
+A <- as_adjacency_matrix(g, sparse = FALSE)
+
+B <- A - (k %*% t(k)) / (2 * m)
+
+cat("Modularity matrix properties:\n")
+cat("- Sum of row 1:", round(sum(B[1,]), 10), "(should be ~0)\n")
+cat("- Sum of all elements:", round(sum(B), 10), "(should be ~0)\n\n")
+
+# Community detection con Louvain
+communities <- cluster_louvain(g)
+
+cat("Community detection results:\n")
+cat("- Number of communities:", length(communities), "\n")
+cat("- Modularity Q:", round(modularity(communities), 4), "\n")
+cat("- Community sizes:", sizes(communities), "\n\n")
+
+# Top parole per community
+communities_df <- tibble(
+  word = V(g)$name,
+  community = membership(communities),
+  degree = degree(g)
+) %>%
+  group_by(community) %>%
+  arrange(desc(degree)) %>%
+  slice_head(n = 8)
+
+cat("Top 8 words per community:\n")
+print(communities_df, n = 100)
+
+# Visualizzazione communities
+set.seed(42)
+ggraph(g, layout = "fr") +
+  geom_edge_link(alpha = 0.05, color = "gray80") +
+  geom_node_point(aes(color = factor(membership(communities)), 
+                      size = degree(g)), alpha = 0.7) +
+  geom_node_text(aes(label = name, 
+                     filter = degree(g) > quantile(degree(g), 0.93)),
+                 repel = TRUE, size = 3, max.overlaps = 15) +
+  scale_size_continuous(range = c(2, 8)) +
+  theme_void() +
+  labs(title = "Semantic Communities — Murakami Corpus",
+       subtitle = paste("Louvain algorithm | Modularity Q =", 
+                       round(modularity(communities), 3))) +
+  theme(legend.position = "none")
+
+
+# 7. PROPRIETà PICCOLO MONDO
+
+cat("\n\n=== 7. SMALL-WORLD PROPERTIES ===\n\n")
+
+mean_dist <- mean_distance(giant_component, directed = FALSE)
+diam <- diameter(giant_component)
+n_nodes <- vcount(giant_component)
+
+cat("Network properties:\n")
+cat("- Nodes:", n_nodes, "\n")
+cat("- Mean distance:", round(mean_dist, 3), "\n")
+cat("- Diameter:", diam, "\n")
+cat("- log(n):", round(log(n_nodes), 3), "\n")
+cat("- Mean distance / log(n):", round(mean_dist / log(n_nodes), 3), "\n\n")
+
+dist_table <- distance_table(giant_component)
+dist_freq <- dist_table$res / sum(dist_table$res)
+
+barplot(dist_freq, 
+        names.arg = 1:length(dist_freq),
+        main = "Distribution of Distances — Largest Component",
+        xlab = "Distance", ylab = "Frequency",
+        col = "steelblue")
+
+cat("avg distance ~", 
+    round(mean_dist, 2), ", \n")
+
+# 9. ANALISI COMPONENTI ISOLATE
+
+cat("\n\n=== 9. ISOLATED COMPONENTS ===\n\n")
+
+for (i in 1:components_list$no) {
+  if (components_list$csize[i] < max(components_list$csize)) {
+    cat("\nComponent", i, "(size:", components_list$csize[i], ")\n")
+    comp_nodes <- V(g)$name[components_list$membership == i]
+    cat("Nodes:", paste(comp_nodes, collapse = ", "), "\n")
+    
+    comp_graph <- induced_subgraph(g, which(components_list$membership == i))
+    
+    if (ecount(comp_graph) > 0) {
+      edges_comp <- as_data_frame(comp_graph, what = "edges")
+      cat("Edges:\n")
+      print(edges_comp)
+    }
+  }
+}
+
+```
+
+Per analizzare l’organizzazione strutturale del vocabolario murakamiano, abbiamo utilizzato la rete di co-occorrenze lessicali.
+La rete risultante comprende 89 nodi e 158 archi con una densità pari a 0.0403. Tale bassa densità indica che il lessico non forma una struttura uniformemente connessa, ma tende a organizzarsi in nuclei tematici distinti, separati da ampie regioni scarsamente collegate. La rete appare dunque globalmente sparsa, ma localmente densa.
+
+La rete è composta da 18 componenti connesse, una delle quali emerge nettamente come componente gigante, con 52 nodi e 118 archi. Questa componente concentra la maggior parte delle connessioni e rappresenta il nucleo semantico globale del corpus che come abbiamo visto anche dall'analisi precedenti gira tutto intorno alla parola Time. 
+Le restanti componenti sono di dimensioni molto ridotte (2–4 nodi) e risultano strutturalmente isolate dal resto della rete.
+
+La densità della componente gigante (0.089) è più che doppia rispetto a quella dell’intera rete, segnalando una maggiore coesione interna.
+
+La degree centrality identifica le parole che co-occorrono con il maggior numero di termini distinti, fungendo da hub lessicali.
+
+La parola time emerge come hub assoluto, con un degree pari a 68, valore nettamente superiore a quello di qualsiasi altro nodo. Seguono tengo (20) ed eyes (12), mentre aomame, world, people, head e looked completano il nucleo delle parole più connesse. Questo insieme delinea un asse semantico stabile, incentrato su tempo, percezione, corpo ed esistenza, che come anche visto prima, attraversa trasversalmente l’intero corpus.
+
+La closeness centrality misura quanto una parola sia mediamente vicina a tutte le altre in termini di distanza geodetica. Poiché la rete globale è sconnessa, la closeness è stata calcolata esclusivamente sulla componente gigante, evitando distorsioni dovute alla presenza di componenti isolate.
+
+I risultati confermano time come nodo strutturalmente centrale anche in termini di distanza, 
+La convergenza tra degree e closeness rafforza l’interpretazione di time come asse portante dell’architettura lessicale.
+
+La betweenness centrality quantifica il numero di cammini minimi che attraversano un nodo, identificando le parole che fungono da ponti tra regioni semantiche diverse. Anche in questo caso, time domina nettamente con un valore pari a 1158, più del quadruplo del secondo classificato (tengo, 246).
+
+Parole come eyes, head, night e world mostrano betweenness elevata pur avendo un degree relativamente contenuto, indicando che la loro importanza non risiede nel numero di connessioni, ma nella loro posizione strategica all’interno della rete. Al contrario, coppie di nomi propri come fuka e eri presentano betweenness nulla, rimanendo confinate in regioni semantiche locali senza contribuire alla connessione globale del grafo.
+
+L’algoritmo di Louvain individua 22 comunità, con una modularità pari a 0.6781, valore che indica una struttura comunitaria fortemente marcata. Le connessioni all’interno delle comunità superano ampiamente quelle attese per caso, confermando la presenza di cluster semantici coerenti.
+
+La comunità dominante è centrata su time e raccoglie termini esistenziali e temporali (life, mind, day, ago), configurandosi come il cuore filosofico del vocabolario. Altre comunità risultano fortemente legate a singoli romanzi o contesti narrativi, come il cluster di 1Q84 (tengo, aomame, fuka, eri), o il cluster percettivo dominato da eyes e dai verbi dello sguardo. Micro-comunità isolate, come book–read–reading–books, confermano la presenza di temi specifici e autosufficienti.
+
+L’analisi delle proprietà di small-world, condotta sulla componente gigante, mostra una distanza media pari a 2.59 e un diametro pari a 6, a fronte di un valore log(𝑛)log(n) di circa 3.95. Il rapporto tra distanza media e log(𝑛)log(n) (≈ 0.65) indica che la rete presenta cammini sorprendentemente brevi.
+
+Questo risultato suggerisce che il nucleo lessicale murakamiano è altamente navigabile.
+La distribuzione delle distanze mostra una netta concentrazione su valori bassi (2–3), tipica delle reti small-world reali.
+
+Nelle componenti esterne si osservano numerose coppie di nomi propri (saeki–miss, wataya–noboru, hoshino–nakata, miu–sumire), che riflettono relazioni narrative specifiche e circoscritte.
+
+L’analisi di rete mostra che il vocabolario murakamiano si organizza come una struttura small-world, caratterizzata da un nucleo compatto e altamente connesso dominato da poche parole-chiave (time, eyes, world), e da una costellazione di micro-comunità narrative isolate. La modularità elevata indica che ogni romanzo conserva una propria identità lessicale, pur condividendo un linguaggio concettuale trasversale.
+
+In questo senso, la rete lessicale non è una semplice collezione di frequenze, ma una vera architettura semantica: il tempo, la percezione e l’esistenza fungono da assi portanti, mentre personaggi e contesti specifici formano isole narrative che arricchiscono, senza frammentare, l’universo murakamiano.
+
+# 5. CONFRONTO TRA LIBRI
+```{r confronti}
+
+# PREPARAZIONE Tokenizzazione libri di confronto
+altri_tidy <- dfA %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words) 
+
+#write_rds(altri_tidy, "others_books_tidy.rds")
+
+
+# 1. CONFRONTO MURAKAMI VS ALTRI AUTORI 
+
+frequency <- bind_rows(
+  libri_tidy %>% mutate(author = "Murakami"),
+  altri_tidy %>% mutate(author = libro)
+) %>%
+  mutate(word = str_extract(word, "[a-z']+")) %>% 
+  count(author, word) %>%
+  group_by(author) %>%
+  mutate(proportion = n / sum(n)) %>%
+  select(-n) %>%
+  pivot_wider(names_from = author, values_from = proportion)
+
+frequency
+
+# Plot e correlazione per ogni autore di confronto
+libri_confronto <- setdiff(names(frequency), c("word", "Murakami"))
+
+for (libro in libri_confronto) {
+  
+  p <- ggplot(frequency, aes(x = .data[[libro]], y = Murakami)) +
+    geom_abline(color = "gray40", lty = 2) +
+    geom_text(aes(label = word), check_overlap = TRUE, vjust = 1.5, size = 2.5) +
+    scale_x_log10(labels = percent_format()) +
+    scale_y_log10(labels = percent_format()) +
+    labs(title = paste("Murakami vs", libro),
+         x = libro,
+         y = "Murakami") +
+    theme_bw()
+  
+  print(p)
+  
+  cor_result <- cor.test(frequency[[libro]], frequency$Murakami)
+  cat("\nCorrelation Murakami -", libro, ":", round(cor_result$estimate, 3), "\n")
+}
+
+
+# 2. CONFRONTI DIRETTI: 1Q84 vs 1984
+
+freq_1q84_vs_1984 <- bind_rows(
+  libri_tidy %>%
+    filter(libro == "12-1Q84") %>%
+    mutate(author = "1Q84"),
+  altri_tidy %>%
+    filter(libro == "1984") %>%
+    mutate(author = "1984")
+) %>%
+  mutate(word = str_extract(word, "[a-z']+")) %>%
+  count(author, word) %>%
+  group_by(author) %>%
+  mutate(proportion = n / sum(n)) %>%
+  select(-n) %>%
+  pivot_wider(names_from = author, values_from = proportion)
+
+# Plot
+ggplot(freq_1q84_vs_1984, aes(x = `1984`, y = `1Q84`)) +
+  geom_abline(color = "gray40", lty = 2) +
+  geom_text(aes(label = word), check_overlap = TRUE, vjust = 1.5, size = 2.5) +
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  labs(title = "1Q84 (Murakami) vs 1984 (Orwell)",
+       x = "1984 — Orwell",
+       y = "1Q84 — Murakami") +
+  theme_bw()
+
+# Correlazione
+cor.test(freq_1q84_vs_1984$`1984`, freq_1q84_vs_1984$`1Q84`)
+
+
+# 3. CONFRONTI DIRETTI: VENTO vs TROTA
+freq_vento_vs_trota <- bind_rows(
+  libri_tidy %>%
+    filter(libro == "1-Hear the Wind Sing") %>%
+    mutate(author = "Hear the Wind Sing"),
+  altri_tidy %>%
+    filter(libro == "Trout Fishing in America") %>%  
+    mutate(author = "Trout Fishing in America")    
+) %>%
+  mutate(word = str_extract(word, "[a-z']+")) %>%
+  count(author, word) %>%
+  group_by(author) %>%
+  mutate(proportion = n / sum(n)) %>%
+  select(-n) %>%
+  pivot_wider(names_from = author, values_from = proportion)
+
+# Plot - usa i nomi completi delle colonne
+ggplot(freq_vento_vs_trota, aes(x = `Trout Fishing in America`, y = `Hear the Wind Sing`)) +
+  geom_abline(color = "gray40", lty = 2) +
+  geom_text(aes(label = word), check_overlap = TRUE, vjust = 1.5, size = 2.5) +
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  labs(title = "Hear the Wind Sing vs Trout Fishing in America",
+       x = "Trout Fishing in America — Brautigan",
+       y = "Hear the Wind Sing — Murakami") +
+  theme_bw()
+
+# Correlazione - usa i nomi completi
+cor.test(freq_vento_vs_trota$`Trout Fishing in America`, 
+         freq_vento_vs_trota$`Hear the Wind Sing`)
+
+# 4. IL GRANDE GATSBY vs TUTTI I LIBRI DI MURAKAMI
+
+# Trova quale libro di Murakami è più simile al Grande Gatsby
+risultati_gatsby <- tibble(libro = character(), correlazione = numeric())
+
+libri_murakami <- unique(libri_tidy$libro)
+
+for (l in libri_murakami) {
+  
+  freq_temp <- bind_rows(
+    libri_tidy %>% filter(libro == l) %>% mutate(author = "Murakami"),
+    altri_tidy %>% filter(libro == "The Great Gatsby") %>% mutate(author = "Gatsby")
+  ) %>%
+    mutate(word = str_extract(word, "[a-z']+")) %>%
+    count(author, word) %>%
+    group_by(author) %>%
+    mutate(proportion = n / sum(n)) %>%
+    select(-n) %>%
+    pivot_wider(names_from = author, values_from = proportion) %>%
+    filter(!is.na(Murakami), !is.na(Gatsby))
+  
+  cor_val <- cor(freq_temp$Gatsby, freq_temp$Murakami, use = "complete.obs")
+  
+  risultati_gatsby <- risultati_gatsby %>%
+    add_row(libro = l, correlazione = cor_val)
+}
+
+# Trova libro più correlato
+migliore_gatsby <- risultati_gatsby %>% 
+  slice_max(correlazione, n = 1)
+
+cat("\nMost correlated book to The Great Gatsby:", migliore_gatsby$libro,
+    "— Correlation:", round(migliore_gatsby$correlazione, 3), "\n")
+
+# Plot del migliore
+freq_plot_gatsby <- bind_rows(
+  libri_tidy %>% filter(libro == migliore_gatsby$libro) %>% mutate(author = "Murakami"),
+  altri_tidy %>% filter(libro == "The Great Gatsby") %>% mutate(author = "Gatsby")
+) %>%
+  mutate(word = str_extract(word, "[a-z']+")) %>%
+  count(author, word) %>%
+  group_by(author) %>%
+  mutate(proportion = n / sum(n)) %>%
+  select(-n) %>%
+  pivot_wider(names_from = author, values_from = proportion)
+
+ggplot(freq_plot_gatsby, aes(x = Gatsby, y = Murakami)) +
+  geom_abline(color = "gray40", lty = 2) +
+  geom_text(aes(label = word), check_overlap = TRUE, vjust = 1.5, size = 2.5) +
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  labs(title = paste("The Great Gatsby vs", migliore_gatsby$libro),
+       x = "The Great Gatsby — Fitzgerald",
+       y = paste(migliore_gatsby$libro, "— Murakami")) +
+  theme_bw()
+
+
+# 5. IL LUNGO ADDIO vs TUTTI I LIBRI DI MURAKAMI
+risultati_addio <- tibble(libro = character(), correlazione = numeric())
+
+for (l in libri_murakami) {
+  
+  freq_temp <- bind_rows(
+    libri_tidy %>% filter(libro == l) %>% mutate(author = "Murakami"),
+    altri_tidy %>% filter(libro == "The Long Goodbye") %>% mutate(author = "Addio")
+  ) %>%
+    mutate(word = str_extract(word, "[a-z']+")) %>%
+    count(author, word) %>%
+    group_by(author) %>%
+    mutate(proportion = n / sum(n)) %>%
+    select(-n) %>%
+    pivot_wider(names_from = author, values_from = proportion) %>%
+    filter(!is.na(Murakami), !is.na(Addio))
+  
+  cor_val <- cor(freq_temp$Addio, freq_temp$Murakami, use = "complete.obs")
+  
+  risultati_addio <- risultati_addio %>%
+    add_row(libro = l, correlazione = cor_val)
+}
+
+# Trova libro più correlato
+migliore_addio <- risultati_addio %>% 
+  slice_max(correlazione, n = 1)
+
+cat("\nMost correlated book to The Long Goodbye:", migliore_addio$libro,
+    "— Correlation:", round(migliore_addio$correlazione, 3), "\n")
+
+# Plot del migliore
+freq_plot_addio <- bind_rows(
+  libri_tidy %>% filter(libro == migliore_addio$libro) %>% mutate(author = "Murakami"),
+  altri_tidy %>% filter(libro == "The Long Goodbye") %>% mutate(author = "Addio")
+) %>%
+  mutate(word = str_extract(word, "[a-z']+")) %>%
+  count(author, word) %>%
+  group_by(author) %>%
+  mutate(proportion = n / sum(n)) %>%
+  select(-n) %>%
+  pivot_wider(names_from = author, values_from = proportion)
+
+ggplot(freq_plot_addio, aes(x = Addio, y = Murakami)) +
+  geom_abline(color = "gray40", lty = 2) +
+  geom_text(aes(label = word), check_overlap = TRUE, vjust = 1.5, size = 2.5) +
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  labs(title = paste("The Long Goodbye vs", migliore_addio$libro),
+       x = "The Long Goodbye — Chandler",
+       y = paste(migliore_addio$libro, "— Murakami")) +
+  theme_bw()
+
+# 6. PRIMO VS ULTIMO LIBRO DI MURAKAMI
+# Identifica primo e ultimo per anno
+
+
+cat("\nFirst book:", "1-Hear the Wind Sing")
+cat("\nLast book:", "15-The City and Its Uncertain", "\n")
+
+# Frequenze primo vs ultimo
+freq_primo_ultimo <- bind_rows(
+  libri_tidy %>% filter(libro == "1-Hear the Wind Sing") %>% mutate(author = "First"),
+  libri_tidy %>% filter(libro == "15-The City and Its Uncertain") %>% mutate(author = "Last")
+) %>%
+  mutate(word = str_extract(word, "[a-z']+")) %>%
+  count(author, word) %>%
+  group_by(author) %>%
+  mutate(proportion = n / sum(n)) %>%
+  select(-n) %>%
+  pivot_wider(names_from = author, values_from = proportion) %>%
+  drop_na() 
+
+# Plot
+ggplot(freq_primo_ultimo, aes(x = First, y = Last)) +
+  geom_abline(color = "gray40", lty = 2) +
+  geom_text(aes(label = word), check_overlap = TRUE, vjust = 1.5, size = 2.5) +
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  labs(title = "First vs Last book",
+       x = paste("First —", "1-Hear the Wind Sing"),
+       y = paste("Last —", "15-The City and Its Uncertain")) +
+  theme_bw()
+
+# Correlazione
+cor.test(freq_primo_ultimo$First, freq_primo_ultimo$Last)
+
+# TF-IDF distintivo 
+tf_idf_confronto <- libri_tidy %>%
+  filter(libro %in% c("1-Hear the Wind Sing", "15-The City and Its Uncertain")) %>%
+  count(libro, word) %>%
+  bind_tf_idf(word, libro, n) %>%
+  arrange(desc(tf_idf)) %>%
+  group_by(libro) %>%
+  top_n(15, tf_idf) %>%
+  ungroup()
+
+tf_idf_confronto %>%
+  mutate(word = reorder_within(word, tf_idf, libro)) %>%
+  ggplot(aes(word, tf_idf, fill = libro)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~libro, ncol = 2, scales = "free") +
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Distinctive words: first vs last book",
+       x = NULL,
+       y = "tf-idf")
+
+# Trova parole presenti in ENTRAMBI i libri
+parole_comuni_primo_ultimo <- freq_primo_ultimo %>%
+  filter(!is.na(First), !is.na(Last)) %>%  
+  mutate(media_prop = (First + Last) / 2) %>%  
+  slice_max(media_prop, n = 20) %>%
+  arrange(desc(media_prop))
+
+parole_comuni_primo_ultimo
+
+# Visualizzazione parole comuni
+parole_comuni_primo_ultimo %>%
+  mutate(word = reorder(word, media_prop)) %>%
+  ggplot(aes(word, media_prop)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = paste("Most common words —", "1-Hear the Wind Sing", "and", "15-The City and Its Uncertain"),
+       x = NULL,
+       y = "Average relative frequency") +
+  theme_bw()
+
+
+# 7. TEMI RICORRENTI (PAROLE PRESENTI IN MOLTI LIBRI)
+# Parole presenti in almeno 10 libri
+temi_ricorrenti <- libri_tidy %>%
+  distinct(libro, word) %>%
+  count(word) %>%
+  filter(n >= 10) %>%
+  arrange(desc(n))
+
+temi_ricorrenti
+
+# Top temi per libro
+libri_tidy %>%
+  filter(libro %in% levels(libro)[1:8]) %>%
+  semi_join(temi_ricorrenti, by = "word") %>%
+  count(libro, word) %>%
+  group_by(libro) %>%
+  mutate(proportion = n / sum(n)) %>%
+  slice_max(proportion, n = 10) %>%
+  ungroup() %>%
+  mutate(word = reorder_within(word, proportion, libro)) %>%
+  ggplot(aes(word, proportion, fill = libro)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~libro, ncol = 3, scales = "free") +
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Recurring themes per book (words in 10+ books)",
+       x = NULL,
+       y = "Relative frequency")
+
+libri_tidy %>%
+  filter(libro %in% levels(libro)[9:15]) %>%
+  semi_join(temi_ricorrenti, by = "word") %>%
+  count(libro, word) %>%
+  group_by(libro) %>%
+  mutate(proportion = n / sum(n)) %>%
+  slice_max(proportion, n = 10) %>%
+  ungroup() %>%
+  mutate(word = reorder_within(word, proportion, libro)) %>%
+  ggplot(aes(word, proportion, fill = libro)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~libro, ncol = 3, scales = "free") +
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Recurring themes per book (words in 10+ books)",
+       x = NULL,
+       y = "Relative frequency")
+
+# 8. EVOLUZIONE TEMPORALE 
+
+libri_ordinati <- dfM %>%
+  distinct(libro, anno) %>%
+  arrange(anno)
+
+libri_seq <- as.character(libri_ordinati$libro)
+
+correlazioni_seq <- tibble(
+  libro1 = character(),
+  libro2 = character(),
+  correlazione = numeric()
+)
+
+for (i in 1:(length(libri_seq) - 1)) {
+  
+  freq_temp <- bind_rows(
+    libri_tidy %>% filter(libro == libri_seq[i]) %>% mutate(author = "Book1"),
+    libri_tidy %>% filter(libro == libri_seq[i+1]) %>% mutate(author = "Book2")
+  ) %>%
+    mutate(word = str_extract(word, "[a-z']+")) %>%
+    count(author, word) %>%
+    group_by(author) %>%
+    mutate(proportion = n / sum(n)) %>%
+    select(-n) %>%
+    pivot_wider(names_from = author, values_from = proportion) %>%
+    filter(!is.na(Book1), !is.na(Book2))
+  
+  cor_val <- cor(freq_temp$Book1, freq_temp$Book2, use = "complete.obs")
+  
+  cat(i, "|", libri_seq[i], "→", libri_seq[i+1], 
+      "| cor:", round(cor_val, 3), "\n")
+  
+  correlazioni_seq <- correlazioni_seq %>%
+    add_row(libro1 = libri_seq[i], 
+            libro2 = libri_seq[i+1], 
+            correlazione = cor_val)
+}
+
+# Plot
+correlazioni_seq %>%
+  mutate(ordine = row_number(),
+         coppia = paste(str_trunc(libro1, 20), "→", str_trunc(libro2, 20))) %>%
+  ggplot(aes(x = reorder(coppia, ordine), y = correlazione)) +
+  geom_col(fill = "steelblue") +
+  geom_hline(yintercept = mean(correlazioni_seq$correlazione), 
+             lty = 2, color = "red") +
+  coord_flip() +
+  labs(title = "Correlation between consecutive books (by year)",
+       x = NULL,
+       y = "Correlation") +
+  theme_minimal()
+
+
+# 9. LIBRI POPOLARI 
+libri_popolari <- c("5-Norwegian wood", 
+                    "12-1Q84", 
+                    "10-Kafka On The Shore")
+
+# TF-IDF libri popolari
+libri_tidy %>%
+  filter(libro %in% libri_popolari) %>%
+  count(libro, word) %>%
+  bind_tf_idf(word, libro, n) %>%
+  group_by(libro) %>%
+  top_n(15, tf_idf) %>%
+  ungroup() %>%
+  mutate(word = reorder_within(word, tf_idf, libro)) %>%
+  ggplot(aes(word, tf_idf, fill = libro)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~libro, ncol = 2, scales = "free") +
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Distinctive words — Popular books",
+       x = NULL,
+       y = "tf-idf")
+
+# Parole comuni tra libri popolari
+libri_tidy %>%
+  filter(libro %in% libri_popolari) %>%
+  count(libro, word) %>%
+  group_by(word) %>%
+  filter(n() == length(libri_popolari)) %>% 
+  ungroup() %>%
+  group_by(libro) %>%
+  mutate(proportion = n / sum(n)) %>%
+  ungroup() %>%
+  group_by(word) %>%
+  summarise(media_prop = mean(proportion)) %>%
+  slice_max(media_prop, n = 20) %>%
+  mutate(word = reorder(word, media_prop)) %>%
+  ggplot(aes(word, media_prop)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Common words among popular books",
+       x = NULL,
+       y = "Average relative frequency") +
+  theme_bw()
+
+# Correlazioni tra libri popolari
+for (i in 1:(length(libri_popolari) - 1)) {
+  for (j in (i + 1):length(libri_popolari)) {
+    
+    freq_temp <- bind_rows(
+      libri_tidy %>% filter(libro == libri_popolari[i]) %>% mutate(author = "Book1"),
+      libri_tidy %>% filter(libro == libri_popolari[j]) %>% mutate(author = "Book2")
+    ) %>%
+      mutate(word = str_extract(word, "[a-z']+")) %>%
+      count(author, word) %>%
+      group_by(author) %>%
+      mutate(proportion = n / sum(n)) %>%
+      select(-n) %>%
+      pivot_wider(names_from = author, values_from = proportion)
+    
+    cor_val <- cor(freq_temp$Book1, freq_temp$Book2, use = "complete.obs")
+    
+    cat("\nCorrelation", libri_popolari[i], "-", libri_popolari[j], 
+        ":", round(cor_val, 3))
+  }
+}
+
+```
+
+In questa sezione andiamo ad analizzare le correlazioni che sussistono tra i vari libri (i 15 libri di Murakami e i 3 libri di autori di cui Murakami è stato fortemente influenzato)
+
+L'analisi si  basa sul coefficiente di correlazione di Pearson applicato alle frequenze relative delle parole. Questo metodo consente di misurare quanto due testi condividano lo stesso vocabolario concentrandosi così sulla struttura linguistica dei testi.
+
+Gli autori e i libri che ho selezionato per il confronto sono:
+
+- The Long Goodbye di  Raymond Chandler
+- 1984 George Orwell
+- The Great Gatsby
+- Trout Fishing in America
+
+La correlazione più alta emerge con The Long Goodbye di Raymond Chandler (0.705), 
+Questo  dato conferma che Murakami è uno scrittore hard-boiled (autore di narrativa poliziesca che descrive il crimine in modo crudo e realistico, distaccandosi dall'enigma deduttivo classico). L’influenza chandleriana si manifesta attraverso un narratore in prima persona solitario e disincantato, ambientazioni urbane notturne, dialoghi asciutti e una violenza descritta senza moralismo. 
+
+Le parole condivise più frequenti (“world”, “eyes”, “looked”, “hand”, “time”) rimandano a una percezione fenomenologica della realtà, mentre termini come “bar”, “drink”, “guy”, “gun”, “cop” collocano l’esperienza narrativa in uno spazio noir riconoscibile. 
+Murakami utilizza lo stile noir hard-boiled per raccontare la disillusione e l’alienazione delle persone attraverso il surrealismo e la malinconia.
+
+La seconda affinità significativa emerge con George Orwell (1984, 0.586) anche se i valori non sono particolarmente alti. Di base lo stile di Murakami è meno linguistico e più  tematico. 
+Murakami condivide con Orwell l’idea di un potere pervasivo e impersonale (Big Brother trova un’eco nei Little People di 1Q84) e una profonda sfiducia nella possibilità di accedere a una realtà oggettiva e stabile. 
+Tuttavia, mentre Orwell utilizza un vocabolario politico esplicito (“party”, “ministry”, “comrade”), Murakami preferisce un lessico psicologico ed emotivo (“feel”, “moment”, “love”). 
+Orwell infatti descrive il funzionamento del potere mentre Murakami descrive l’effetto del potere sull’individuo.
+
+Con F. Scott Fitzgerald (The Great Gatsby, 0.540) la somiglianza è moderata e passa soprattutto attraverso temi condivisi come la nostalgia per il passato, l’amore irraggiungibile e l’illusione di una felicità sempre rimandata.
+I due autori infatti sono particolarmente diversi sul piano stilistico. 
+Fitzgerald costruisce un mondo barocco e glamour, dominato da nomi propri e simboli di ricchezza mentre Murakami riduce il linguaggio all’ordinario, privilegiando parole neutre e universali come “time”, “people” ed “eyes”. 
+
+Nel caso di Richard Brautigan, la correlazione è decisamente bassa (0.371), nonostante Murakami lo abbia tradotto e citato spesso come influenza. 
+Probabilmente Murakami ha riutilizzato l’attitudine di Brautigan (ironia, frammentazione, leggerezza apparente)  ma non il suo lessico. 
+La bassa correlazione non indica quindi assenza di influenza, ma una influenza di tipo concettuale e meno linguistico.
+
+Il confronto tra 1Q84 e 1984 (correlazione 0.575) conferma la natura di 1Q84 come omaggio tematico piuttosto che riscrittura. Il titolo del libro segnala esplicitamente la correlazione con Orwell (in giapponese, "Q" si pronuncia "kyū" = "9"), ma il suo vocabolario politico viene sostituito da uno emotivo e relazionale. Non è il sistema a essere descritto, ma la solitudine di chi lo abita. 
+
+Un discorso simile vale per Hear the Wind Sing e Trout Fishing in America (0.505). 
+Entrambi sono esordi frammentari, costruiti su capitoli brevissimi e una voce narrante disillusa. Tuttavia, Murakami urbanizza l’estetica sostituendo la natura e l'ambiente con bar, città e riferimenti letterari. La tecnica è appresa, ma il contesto è già autonomo.
+
+Successivamente sono andata a individuare il libro che più si avvicinasse al The Great Gatsby ed è risultato The Wind-Up Bird Chronicle (0.67).
+Il libro rivela una sorprendente affinità strutturale dal momento che in entrambi i casi abbiamo un narratore passivo che osserva il collasso di un sogno legato a una donna perduta, mentre il passato ritorna sotto forma di trauma. 
+Tuttavia, Murakami sostituisce i nomi propri con simboli naturali, spostando il centro emotivo dall’individuo al mito.
+
+Secondo l'analisi, la correlazione più alta è quella di The Long Goodbye e Dance Dance Dance (0.723). Dance Dance Dance è il romanzo in cui Murakami si avvicina di più al modello hard-boiled con un protagonista senza nome, investigazione informale, hotel come spazio liminale, violenza e corruzione. 
+Qui Murakami non si limita a essere influenzato da Chandler, lo riscrive.
+
+Il confronto tra il primo e l’ultimo romanzo (Hear the Wind Sing, 1979, e The City and Its Uncertain Walls, 2023) restituisce una correlazione moderata (0.529) che, considerato i 44 anni di distanza tra  i due libri, può essere considerato un valore abbastanza alto. 
+Le parole chiave condivise — “time”, “town”, “people” — indicano che il nucleo tematico ed esistenziale di Murakami  è rimasto di per se invariato, mentre il lessico si sviluppa da uno colloquiale e americanizzato a uno  simbolico e mitologico.
+
+L’analisi delle correlazioni tra libri consecutivi  mostra invece che Murakami nel tempo  diventa sempre più simile a se stesso. Le correlazioni aumentano man mano che i libri vengono pubblicati  e raggiungendo valori alti nelle opere più recenti. 
+Questo suggerisce una progressiva cristallizzazione dello stile dello scrittore che si focalizza sempre meno sullo sperimentare e sempre di più sulla  perfezione formale.
+
+Con la correlazione possiamo andare a individuare 4 periodi:
+"Period 1 (1979-1985)" = "1-Hear the Wind Sing", "2-Pinball, 1973", "3-A Wild Sheep Chase", che rappresenta la prima trillogia di murakami 
+  
+"Period 2 (1985-1995)" = c("4-Hard Boiled Wonderland and the End of the World", "5-Norwegian wood","6-Dance Dance Dance","7-South of the Border West of the Sun"),
+  
+  
+"Period 3 (1995-2005)" = c("8-The Wind-Up Bird Chronicle", "9-Sputnik Sweetheart","10-Kafka On The Shore"),
+  
+  
+"Period 4 (2005-2023)" = c("11-After Dark", "12-1Q84","13-Colorless Tsukuru Tazaki","14-Killing Commendatore","15-The City and Its Uncertain")
+
+
+Se vogliamo cercare di individuare un patter strutturale tra i libri notiamo che circa 3.500 parole compaiono in almeno 10 dei 15 romanzi analizzati e costistuiscono un vero e proprio vocabolario murakamiano standard. 
+Parole legate al tempo, alla percezione, al corpo e all’esistenza dominano costantemente, indipendentemente dalla trama (
+"time", "people", "eyes", "looked"
+"head", "hand", "day", "night"
+"left", "world").
+ Questo conferma l’esistenza di una palette lessicale stabile, su cui Murakami costruisce variazioni minime.
+La sua evoluzione non è stata rivoluzionaria ma incrementale: ogni libro aggiunge sfumature a una formula che si perfeziona senza mai rompersi.
+
+Per concludere, sono andata ad analizzare i 3 romanzi più famosi dell'autore cercando di individuare i pattern ricorrenti che più vengono amati dal pubblico murakamiano. 
+I libri sono Norwegian Wood, Kafka on the Shore e 1Q84. 
+L’analisi delle correlazioni lessicali tra questi testi mostra valori  elevati: Norwegian Wood–1Q84 (0.740), Norwegian Wood–Kafka on the Shore (0.715) e Kafka on the Shore–1Q84 (0.723), con una media complessiva di 0.726. 
+Si tratta di una correlazione significativamente superiore alla media dell’intero corpus, indicando che i romanzi più amati dal pubblico sono anche quelli più simili tra loro dal punto di vista linguistico.
+
+Dal punto di vista lessicale, questi testi condividono un nucleo comune estremamente stabile: parole come time, people, eyes, world, life, hand, head e looked compaiono con alta frequenza in tutti e tre. Questo vocabolario non rimanda a eventi specifici o a trame particolari, ma a una dimensione esistenziale astratta, fatta di percezione, corporeità minima e riflessione sul tempo. 
+È proprio questa neutralità semantica, oscillante tra introspezione e malinconia, a costituire il cuore riconoscibile dell’esperienza murakamiana.
+
+Le differenze tra i tre romanzi emergono invece nella distribuzione dei nomi propri. Norwegian Wood è dominato da nomi femminili (Naoko, Midori, Reiko), confermando la sua natura fortemente sentimentale e relazionale. Kafka on the Shore presenta un cast più ampio e corale, riflettendo una struttura narrativa complessa e frammentata. 1Q84, infine, mostra una perfetta parità tra protagonisti maschili e femminili (Tengo e Aomame), coerente con la sua costruzione duale. Tuttavia, al di sotto di queste differenze superficiali, il vocabolario di base rimane sorprendentemente uniforme.
+
+Questi dati suggeriscono l’esistenza di una vera e propria formula linguistica del successo murakamiano. I romanzi che hanno avuto maggiore risonanza sono quelli che utilizzano in modo più puro e riconoscibile il lessico esistenziale standard dell’autore, senza deviazioni stilistiche marcate. 
+
+Questo risultato rafforza una delle conclusioni centrali dell’analisi comparativa nel quale si evidenzia come  Murakami è diventato progressivamente un autore che scrive “per somiglianza”.
+La coerenza lessicale  costituisce la chiave della sua riconoscibilità globale. 
+
+Il risultato è un corpus di 15 romanzi che sono variazioni sul tema dell’individuo smarrito nel tempo, che cerca connessioni fragili in un mondo opaco e alienante. 
